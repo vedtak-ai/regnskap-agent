@@ -65,4 +65,4 @@ Etter execute skal fakturaen fortsatt kontrolleres i Fiken før sending.
 
 ## Superføring
 
-Den gamle `fiken-superforing`-skillen kan brukes når Fiken API ikke dekker en konkret UI-flyt. Bruk denne nye CLI-baserte skillen først. Hvis browser-flow må brukes, behold regelen: aldri klikk `Registrer kjøp`, kun `Lagre utkast`.
+Bruk denne CLI-baserte skillen som hovedflyt. Hvis en konkret Fiken UI-flyt ikke dekkes av API-et, skal agenten stoppe og forklare hva som må gjøres manuelt eller lage et trygt utkast der API-et støtter det. Ikke bokfør automatisk.
