@@ -3,9 +3,13 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+import ssl
 import sys
+import urllib.request
 from pathlib import Path
 from typing import Any
+
+import certifi
 
 from .config import (
     Config,
@@ -29,10 +33,16 @@ from .docs import (
     search_accounts,
     search_docs,
 )
+from .ehf_capabilities import KNOWN_EHF_READ_PATHS, detect_ehf_capabilities
 from .fiken import FikenClient, FikenError, company_path
 from .folio import API_DOCS_URL as FOLIO_API_DOCS_URL
 from .folio import OPENAPI_URL as FOLIO_OPENAPI_URL
 from .folio import FolioClient, FolioError
+from .purchase_prepare import duplicate_date_window, prepare_purchase
+from .reconcile import default_start_date, reconcile_card_purchases, today_iso
+
+
+FIKEN_OPENAPI_URL = "https://api.fiken.no/api/v2/docs/swagger.yaml"
 
 
 RESOURCE_ALIASES = {
@@ -125,6 +135,10 @@ def build_parser() -> argparse.ArgumentParser:
     folio_sub = folio.add_subparsers(dest="folio_command")
     add_folio_commands(folio_sub)
 
+    reconcile = sub.add_parser("reconcile", help="Avstem og prioriter regnskapsarbeid på tvers av kilder")
+    reconcile_sub = reconcile.add_subparsers(dest="reconcile_command")
+    add_reconcile_commands(reconcile_sub)
+
     docs = sub.add_parser("docs", help="Søk i Fikens hjelpesider og kontohjelp")
     docs_sub = docs.add_subparsers(dest="docs_command")
     add_docs_commands(docs_sub)
@@ -181,6 +195,12 @@ def add_fiken_read_commands(sub: argparse._SubParsersAction[argparse.ArgumentPar
     get_cmd.add_argument("--filter", action="append", default=[], metavar="KEY=VALUE")
     get_cmd.set_defaults(func=cmd_fiken_get)
 
+    ehf = sub.add_parser("ehf-capabilities", help="Sjekk Fiken API-støtte for EHF-relaterte kjøpsflyter")
+    add_common_company(ehf)
+    ehf.add_argument("--openapi-file", type=Path, help="Les OpenAPI fra lokal fil i stedet for Fiken docs")
+    ehf.add_argument("--skip-probes", action="store_true", help="Ikke probe kjente EHF-read-paths mot Fiken")
+    ehf.set_defaults(func=cmd_ehf_capabilities)
+
 
 def add_fiken_write_commands(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     upload = sub.add_parser("upload-inbox", help="Last opp bilag til Fiken inbox")
@@ -211,6 +231,14 @@ def add_fiken_write_commands(sub: argparse._SubParsersAction[argparse.ArgumentPa
     add_json_body(invoice)
     add_execute(invoice)
     invoice.set_defaults(func=cmd_invoice_draft)
+
+    prepare = sub.add_parser("prepare-purchase", help="Valider og normaliser kjøpspayload uten å skrive")
+    add_common_company(prepare)
+    add_json_body(prepare)
+    prepare.add_argument("--skip-duplicates", action="store_true", help="Ikke hent eksisterende kjøp for duplikatsjekk")
+    prepare.add_argument("--duplicate-days", type=int, default=10, help="Datotoleranse for duplikatsjekk")
+    prepare.add_argument("--page-size", type=int, default=100, help="Fiken pageSize for duplikatsjekk")
+    prepare.set_defaults(func=cmd_prepare_purchase)
 
     purchase = sub.add_parser("purchase", help="Opprett kjøp. Brukes bare etter eksplisitt godkjenning.")
     add_common_company(purchase)
@@ -310,6 +338,24 @@ def add_folio_commands(sub: argparse._SubParsersAction[argparse.ArgumentParser])
 def add_folio_date_range(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--start-date", required=True, help="Fra-dato YYYY-MM-DD")
     parser.add_argument("--end-date", help="Til-dato YYYY-MM-DD")
+
+
+def add_reconcile_commands(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    card = sub.add_parser(
+        "card-purchases",
+        help="Match Folio-kortkjøp mot Fiken-kjøp, utkast og inbox",
+    )
+    add_common_company(card)
+    card.add_argument("--start-date", default=default_start_date(), help="Fra-dato YYYY-MM-DD")
+    card.add_argument("--end-date", default=today_iso(), help="Til-dato YYYY-MM-DD")
+    card.add_argument("--max-days-diff", type=int, default=3, help="Toleranse for datomatch")
+    card.add_argument("--page-size", type=int, default=100, help="Fiken pageSize")
+    card.add_argument(
+        "--only-needs-action",
+        action="store_true",
+        help="Vis bare kjøp som krever oppfølging",
+    )
+    card.set_defaults(func=cmd_reconcile_card_purchases)
 
 
 def add_docs_commands(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
@@ -672,13 +718,16 @@ def cmd_fiken_list(args: argparse.Namespace) -> int:
     company = resolve_company(config, args.company)
     client = client_from_config(config)
     resource = RESOURCE_ALIASES[args.resource]
+    params, default_filters = list_params_for_resource(args.resource, args.filter)
     result = client.get_paginated(
         company_path(company, resource),
-        params=parse_filters(args.filter),
+        params=params,
         page=args.page,
         page_size=args.page_size,
         all_pages=args.all,
     )
+    if default_filters:
+        result["default_filters"] = default_filters
     print_json(result)
     return 0
 
@@ -686,6 +735,40 @@ def cmd_fiken_list(args: argparse.Namespace) -> int:
 def cmd_fiken_get(args: argparse.Namespace) -> int:
     client = client_from_config()
     print_response(client.get(args.path, params=parse_filters(args.filter)))
+    return 0
+
+
+def cmd_ehf_capabilities(args: argparse.Namespace) -> int:
+    config = load_config()
+    company = resolve_company(config, args.company)
+    openapi_text = (
+        args.openapi_file.read_text(encoding="utf-8")
+        if args.openapi_file
+        else fetch_text_url(FIKEN_OPENAPI_URL)
+    )
+    probed_paths: dict[str, dict[str, Any]] = {}
+    if not args.skip_probes:
+        client = client_from_config(config)
+        for template in KNOWN_EHF_READ_PATHS:
+            path = template.replace("{companySlug}", company)
+            try:
+                response = client.get(path, params={"pageSize": 1})
+                probed_paths[template] = {
+                    "ok": True,
+                    "status": response.status,
+                    "data_type": type(response.data).__name__,
+                }
+            except FikenError as exc:
+                probed_paths[template] = {
+                    "ok": False,
+                    "status": exc.status,
+                    "error": str(exc),
+                }
+    result = detect_ehf_capabilities(openapi_text=openapi_text, probed_paths=probed_paths)
+    result["ok"] = True
+    result["company"] = company
+    result["openapi_url"] = FIKEN_OPENAPI_URL
+    print_json(result)
     return 0
 
 
@@ -749,10 +832,85 @@ def cmd_invoice_draft(args: argparse.Namespace) -> int:
     return write_json_request(args, "POST", company_path(company, "invoices/drafts"), read_json_arg(args), config=config)
 
 
+def cmd_prepare_purchase(args: argparse.Namespace) -> int:
+    config = load_config()
+    company = resolve_company(config, args.company)
+    candidate = read_json_arg(args)
+    existing_purchases: list[dict[str, Any]] = []
+    if not args.skip_duplicates:
+        window = duplicate_date_window(candidate.get("date"), args.duplicate_days)
+        if window:
+            existing_purchases = client_from_config(config).get_paginated(
+                company_path(company, "purchases"),
+                params={"dateGe": window[0], "dateLe": window[1]},
+                page_size=args.page_size,
+                all_pages=True,
+            )["data"]
+    result = prepare_purchase(
+        candidate,
+        existing_purchases=existing_purchases,
+        duplicate_days=args.duplicate_days,
+    )
+    result["company"] = company
+    print_json(result)
+    return 0
+
+
 def cmd_purchase(args: argparse.Namespace) -> int:
     config = load_config()
     company = resolve_company(config, args.company)
     return write_json_request(args, "POST", company_path(company, "purchases"), read_json_arg(args), config=config)
+
+
+def cmd_reconcile_card_purchases(args: argparse.Namespace) -> int:
+    config = load_config()
+    company = resolve_company(config, args.company)
+    fiken = client_from_config(config)
+    folio = folio_client_from_config(config)
+
+    folio_params = {
+        "startDate": args.start_date,
+        "endDate": args.end_date,
+        "includeMerchants": True,
+        "includeAgents": True,
+        "includeCards": True,
+    }
+    folio_data = folio.get("/events", params=folio_params).data
+    purchases = fiken.get_paginated(
+        company_path(company, "purchases"),
+        params={"dateGe": args.start_date, "dateLe": args.end_date},
+        page_size=args.page_size,
+        all_pages=True,
+    )["data"]
+    purchase_drafts = fiken.get_paginated(
+        company_path(company, "purchases/drafts"),
+        page_size=args.page_size,
+        all_pages=True,
+    )["data"]
+    inbox_documents = fiken.get_paginated(
+        company_path(company, "inbox"),
+        page_size=args.page_size,
+        all_pages=True,
+    )["data"]
+    bank_accounts = fiken.get_paginated(
+        company_path(company, "bankAccounts"),
+        page_size=args.page_size,
+        all_pages=True,
+    )["data"]
+    report = reconcile_card_purchases(
+        folio_events=extract_collection(folio_data, "events"),
+        purchases=purchases,
+        purchase_drafts=purchase_drafts,
+        inbox_documents=inbox_documents,
+        bank_accounts=bank_accounts,
+        start_date=args.start_date,
+        end_date=args.end_date,
+        max_days_diff=args.max_days_diff,
+        only_needs_action=args.only_needs_action,
+    )
+    report["company"] = company
+    print_json(report)
+    return 0
 
 
 def write_json_request(
@@ -800,6 +958,16 @@ def folio_date_params(args: argparse.Namespace) -> dict[str, Any]:
     return params
 
 
+def extract_collection(data: Any, key: str) -> list[dict[str, Any]]:
+    if isinstance(data, list):
+        return [item for item in data if isinstance(item, dict)]
+    if isinstance(data, dict):
+        value = data.get(key) or data.get("data") or []
+        if isinstance(value, list):
+            return [item for item in value if isinstance(item, dict)]
+    return []
+
+
 def parse_filters(items: list[str]) -> dict[str, Any]:
     params: dict[str, Any] = {}
     for item in items:
@@ -808,6 +976,15 @@ def parse_filters(items: list[str]) -> dict[str, Any]:
         key, value = item.split("=", 1)
         params[key] = parse_value(value)
     return params
+
+
+def list_params_for_resource(resource: str, filters: list[str]) -> tuple[dict[str, Any], dict[str, Any]]:
+    params = parse_filters(filters)
+    default_filters: dict[str, Any] = {}
+    if resource == "inbox" and "status" not in params:
+        params["status"] = "unused"
+        default_filters["status"] = "unused"
+    return params, default_filters
 
 
 def parse_value(value: str) -> Any:
@@ -829,6 +1006,12 @@ def checked_file(path: Path) -> Path:
     if not resolved.exists() or not resolved.is_file():
         raise FileNotFoundError(str(resolved))
     return resolved
+
+
+def fetch_text_url(url: str) -> str:
+    context = ssl.create_default_context(cafile=certifi.where())
+    with urllib.request.urlopen(url, timeout=60, context=context) as response:
+        return response.read().decode("utf-8", errors="replace")
 
 
 def print_response(response: Any) -> None:

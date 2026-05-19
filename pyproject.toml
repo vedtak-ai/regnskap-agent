@@ -1,10 +1,13 @@
 [project]
 name = "regnskap-agent"
-version = "0.1.5"
+version = "0.1.14"
 description = "CLI og Codex-skill for trygge Fiken-regnskapsworkflows"
 readme = "README.md"
 requires-python = ">=3.11"
 dependencies = ["certifi>=2025.10.5"]
+
+[dependency-groups]
+dev = ["pytest>=8.0"]
 
 [project.scripts]
 regnskap = "regnskap_agent.cli:main"

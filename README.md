@@ -90,6 +90,38 @@ CLI-en har raw `regnskap folio get /path` for nye read-endepunkter. Betalingsopp
 regnskap folio upload-attachment <event-id> --file ./receipt.pdf
 ```
 
+## Avstemming av kortkjøp
+
+For å unngå at agenten må hente store rå JSON-lister og selv holde hele avstemmingen i kontekst, finnes en samlet read-only rapport for kortkjøp:
+
+```bash
+regnskap reconcile card-purchases --start-date 2026-05-01 --end-date 2026-05-31 --only-needs-action
+```
+
+Kommandoen henter Folio-events, Fiken-kjøp, kjøpsutkast, inbox og bankkontoer, og matcher på beløp, dato, betalingskonto og tekst. Rapporten markerer blant annet `booked`, `booked_missing_attachment`, `purchase_draft`, `inbox_possible_match`, `ready_to_book` og `missing_receipt`.
+
+Den foreslår ikke konto eller MVA basert på hardkodede merchants. Agenten skal bruke bilaget, Fikens kontohjelp og relevant kontekst for den vurderingen.
+
+## Kjøpsklargjøring
+
+Før kjøp opprettes kan agenten validere og normalisere en strukturert kandidat:
+
+```bash
+regnskap fiken prepare-purchase --company <slug> --json-file purchase-candidate.json
+```
+
+Kommandoen skriver ikke til Fiken. Den returnerer `ready`, `needs_clarification` eller `blocked`, beregner eller validerer eksplisitt MVA-beløp der det er trygt, viser kontaktstatus, vedleggsstatus og duplikatfunn. Selve opprettelsen skjer fortsatt med separate `create-contact`, `purchase` og `attach-purchase`-kommandoer etter godkjenning.
+
+For EHF-varsler kan agenten sjekke hva som er tilgjengelig i Fiken API:
+
+```bash
+regnskap fiken ehf-capabilities --company <slug>
+```
+
+Dette skiller mellom at kjøp/kjøpsutkast kan føres via API, og om selve EHF-oversikten er eksponert som dokumentert API-endepunkt.
+
+`regnskap fiken list inbox` viser ubrukte bilag som standard for å unngå støy i agentflyten. Bruk `--filter status=all` for hele inbox-historikken eller `--filter status=used` for brukte bilag.
+
 ## Trygg skriveflyt
 
 Alle skrivekommandoer er `dry-run` som standard. Bruk først:

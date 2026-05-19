@@ -14,11 +14,14 @@ Denne CLI-en dekker vanlige Fiken-workflows og gjør write-operasjoner som dry-r
 | List kontakter | `regnskap fiken list contacts --company <slug>` |
 | Opprett kontakt | `regnskap fiken create-contact --company <slug> --json-file contact.json` |
 | List fakturaer | `regnskap fiken list invoices --company <slug>` |
+| Sjekk EHF/API-kapabilitet | `regnskap fiken ehf-capabilities --company <slug>` |
 | Lag fakturautkast | `regnskap fiken invoice-draft --company <slug> --json-file invoice.json` |
 | List kjøp | `regnskap fiken list purchases --company <slug>` |
+| Preflight for kjøp | `regnskap fiken prepare-purchase --company <slug> --json-file purchase-candidate.json` |
 | Opprett kjøp | `regnskap fiken purchase --company <slug> --json-file purchase.json` |
 | Last opp inbox-bilag | `regnskap fiken upload-inbox --company <slug> --file bilag.pdf` |
 | Legg ved kjøpsbilag | `regnskap fiken attach-purchase --company <slug> --purchase-id <id> --file bilag.pdf` |
+| Avstem kortkjøp mot Fiken/Folio | `regnskap reconcile card-purchases --company <slug> --start-date <date> --end-date <date>` |
 
 ## Dekket via generisk list
 
@@ -53,6 +56,7 @@ Rå `post` og `patch` er også dry-run som standard.
 | Les fra Folio API | `regnskap folio get /path --filter key=value` |
 
 Folio betaling-write er ikke eksponert. Event-vedlegg er dry-run som standard.
+Kortkjøpsavstemming er read-only og matcher Folio-events mot Fiken-kjøp, kjøpsutkast og inbox. Den bruker ikke hardkodede merchant-regler for konto eller MVA.
 
 ## Ikke løst ennå
 
