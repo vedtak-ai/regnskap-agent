@@ -76,4 +76,5 @@ regnskap folio get /path --filter key=value
 - Ikke initier betalinger, overføringer, kortendringer eller andre bank-write-operasjoner. Betalingsoppretting finnes i Folio API-et, men CLI-en skal ikke eksponere det før workflowen er eksplisitt designet med approval-gate.
 - `upload-attachment` er dry-run som standard. Bruk `--execute` kun etter eksplisitt godkjenning.
 - Bruk Folio-data til bankavstemming, transaksjonsoversikt og manglende bilag. Bruk Fiken som regnskapssystem og kilde for bokføringsstatus.
+- Ved kortkjøp og kvitteringsjakt, start med `regnskap reconcile card-purchases --start-date <date> --end-date <date> --only-needs-action` for å få en kompakt arbeidsliste på tvers av Folio og Fiken.
 - Hvis samme transaksjon finnes både i Folio og Fiken, rapporter differanser heller enn å prøve å rette automatisk.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import ssl
 import time
 import urllib.error
 import urllib.parse
@@ -10,6 +11,8 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
+
+import certifi
 
 
 BASE_URL = "https://api.fiken.no/api/v2"
@@ -71,8 +74,9 @@ class FikenClient:
 
         req = urllib.request.Request(url, data=data, headers=req_headers, method=method.upper())
         self._throttle()
+        context = ssl.create_default_context(cafile=certifi.where())
         try:
-            with urllib.request.urlopen(req, timeout=60) as resp:
+            with urllib.request.urlopen(req, timeout=60, context=context) as resp:
                 self._last_request = time.monotonic()
                 raw = resp.read()
                 return Response(
@@ -150,8 +154,9 @@ class FikenClient:
         }
         req = urllib.request.Request(url, data=body, headers=req_headers, method="POST")
         self._throttle()
+        context = ssl.create_default_context(cafile=certifi.where())
         try:
-            with urllib.request.urlopen(req, timeout=120) as resp:
+            with urllib.request.urlopen(req, timeout=120, context=context) as resp:
                 self._last_request = time.monotonic()
                 raw = resp.read()
                 return Response(

@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import json
+import ssl
 from pathlib import Path
 
-from regnskap_agent.cli import main, parse_filters
+from regnskap_agent.cli import list_params_for_resource, main, parse_filters
 from regnskap_agent.docs import search_accounts
+from regnskap_agent.fiken import FikenClient
 
 
 def test_setup_reads_token_from_stdin(tmp_path: Path, monkeypatch, capsys) -> None:
@@ -72,6 +74,32 @@ def test_folio_setup_uses_default_base_url(tmp_path: Path, monkeypatch, capsys) 
     assert code == 0
     payload = json.loads(capsys.readouterr().out)
     assert payload["folio_base_url"] == "https://api.folio.no/v2"
+
+
+def test_fiken_client_uses_certifi_ssl_context(monkeypatch) -> None:
+    contexts = []
+
+    class Response:
+        status = 200
+        headers = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def read(self) -> bytes:
+            return b"{}"
+
+    def fake_urlopen(request, *, timeout, context):
+        contexts.append(context)
+        return Response()
+
+    monkeypatch.setattr("regnskap_agent.fiken.urllib.request.urlopen", fake_urlopen)
+    response = FikenClient("token").get("/user")
+    assert response.status == 200
+    assert isinstance(contexts[0], ssl.SSLContext)
 
 
 def test_folio_upload_attachment_is_dry_run(tmp_path: Path, capsys) -> None:
@@ -154,6 +182,24 @@ def test_parse_filters_types() -> None:
     }
 
 
+def test_list_inbox_defaults_to_unused_documents() -> None:
+    params, defaults = list_params_for_resource("inbox", [])
+    assert params["status"] == "unused"
+    assert defaults == {"status": "unused"}
+
+
+def test_list_inbox_status_filter_overrides_default() -> None:
+    params, defaults = list_params_for_resource("inbox", ["status=all"])
+    assert params["status"] == "all"
+    assert defaults == {}
+
+
+def test_list_other_resources_do_not_get_inbox_default() -> None:
+    params, defaults = list_params_for_resource("purchases", [])
+    assert "status" not in params
+    assert defaults == {}
+
+
 def test_upload_inbox_is_dry_run(tmp_path: Path, capsys) -> None:
     receipt = tmp_path / "bilag.pdf"
     receipt.write_bytes(b"%PDF-1.4\n")
@@ -188,3 +234,79 @@ def test_invoice_draft_is_dry_run(capsys) -> None:
     payload = json.loads(capsys.readouterr().out)
     assert payload["method"] == "POST"
     assert payload["path"] == "/companies/vedtak-as/invoices/drafts"
+
+
+def test_prepare_purchase_is_read_only_preflight(tmp_path: Path, capsys) -> None:
+    receipt = tmp_path / "microsoft.pdf"
+    receipt.write_bytes(b"%PDF-1.4\n")
+    code = main(
+        [
+            "fiken",
+            "prepare-purchase",
+            "--company",
+            "vedtak-as",
+            "--skip-duplicates",
+            "--json",
+            json.dumps(
+                {
+                    "identifier": "NO-TI2600142222",
+                    "date": "2026-05-05",
+                    "kind": "supplier",
+                    "supplierId": 11785380966,
+                    "paid": True,
+                    "paymentAccount": "1920:10003",
+                    "paymentDate": "2026-05-05",
+                    "receiptSource": "leverandør-PDF",
+                    "attachments": [str(receipt)],
+                    "lines": [
+                        {
+                            "description": "Microsoft 365 Business Basic",
+                            "account": "6553",
+                            "vatType": "HIGH",
+                            "netPrice": 10728,
+                        }
+                    ],
+                }
+            ),
+        ]
+    )
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["status"] == "ready"
+    assert payload["purchase_payload"]["lines"][0]["vat"] == 2682
+    assert payload["duplicates"]["status"] == "not_checked"
+
+
+def test_ehf_capabilities_uses_openapi_file_without_probing(tmp_path: Path, capsys) -> None:
+    openapi = tmp_path / "swagger.yaml"
+    openapi.write_text(
+        """
+paths:
+  /companies/{companySlug}/purchases:
+    post: {}
+  /companies/{companySlug}/purchases/drafts:
+    get: {}
+  /companies/{companySlug}/inbox:
+    get: {}
+""",
+        encoding="utf-8",
+    )
+
+    code = main(
+        [
+            "fiken",
+            "ehf-capabilities",
+            "--company",
+            "vedtak-as",
+            "--openapi-file",
+            str(openapi),
+            "--skip-probes",
+        ]
+    )
+
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["purchase_api_supported"] is True
+    assert payload["purchase_drafts_supported"] is True
+    assert payload["inbox_supported"] is True
+    assert payload["ehf_overview_api_supported"] is False

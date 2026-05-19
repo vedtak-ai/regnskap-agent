@@ -8,11 +8,12 @@ Foretrekk API og utkast over nettleserautomatisering. Fiken web brukes fortsatt 
 
 | Konto | Bruk |
 |---|---|
-| 6553 | Programvare og SaaS, for eksempel OpenAI, Anthropic, Google Workspace, Microsoft |
+| 6553 | Programvare og SaaS når bilaget og Fikens kontohjelp støtter det |
 | 6705 | Regnskapsfører og regnskapstjenester |
 | 6901 | Telefon og mobil |
 | 7140 | Reise |
 | 7321 | Markedsføring |
+| 7601 | Royalties, lisensavgifter, domener og lignende når bilag og kontohjelp støtter det |
 | 4300 | Varekjøp dersom relevant |
 
 ## MVA
@@ -30,6 +31,11 @@ Ikke gjett ved usikker MVA. Stopp og be om regnskapsfaglig avklaring.
 
 Før kjøp opprettes:
 
+Ved kortkjøp fra Folio, start med samlet avstemming:
+```bash
+regnskap reconcile card-purchases --company <slug> --start-date=YYYY-MM-DD --end-date=YYYY-MM-DD --only-needs-action
+```
+
 1. Søk etter eksisterende kjøp:
    ```bash
    regnskap fiken list purchases --company <slug> --filter dateGe=YYYY-MM-DD --filter dateLe=YYYY-MM-DD
@@ -44,9 +50,13 @@ Før kjøp opprettes:
    ```
 4. Lag JSON-payload og kjør dry-run:
    ```bash
+   regnskap fiken prepare-purchase --company <slug> --json-file purchase-candidate.json
+   ```
+5. Når preflight er klar, kjør purchase dry-run:
+   ```bash
    regnskap fiken purchase --company <slug> --json-file purchase.json
    ```
-5. Bare etter godkjenning:
+6. Bare etter godkjenning:
    ```bash
    regnskap fiken purchase --company <slug> --json-file purchase.json --execute
    ```
