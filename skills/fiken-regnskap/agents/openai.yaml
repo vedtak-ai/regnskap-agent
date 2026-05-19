@@ -1,0 +1,4 @@
+interface:
+  display_name: "Fiken regnskap"
+  short_description: "Bruk Fiken CLI trygt til regnskapsutkast, bilag og rapportering."
+  default_prompt: "Hjelp meg med Fiken-regnskap ved å analysere bilag, foreslå føringer og bruke CLI-en med dry-run før alle skriveoperasjoner."
