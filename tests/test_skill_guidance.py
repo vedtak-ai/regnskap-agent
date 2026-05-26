@@ -12,15 +12,20 @@ def test_skill_requires_decision_table_for_card_purchases() -> None:
         "Leverandør",
         "Beløp",
         "Fiken-status",
-        "Bilag funnet",
-        "Bilagskilde",
+        "Bilag",
         "Konto",
         "MVA",
+        "Anbefaling/grunnlag",
+    ]:
+        assert column in skill
+    for removed_column in [
+        "Bilag funnet",
+        "Bilagskilde",
         "Faktura/kvitteringsnr.",
         "Anbefalt handling",
         "Grunnlag/usikkerhet",
     ]:
-        assert column in skill
+        assert removed_column not in skill
 
 
 def test_skill_hides_internal_commands_unless_requested() -> None:
