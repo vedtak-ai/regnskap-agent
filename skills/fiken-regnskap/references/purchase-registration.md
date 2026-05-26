@@ -38,10 +38,10 @@ Ikke bland inn allerede bokførte kontrollsaker, historiske avvik eller kreditno
 
 Start med en kort statuslinje med antall `klar til registrering`, `mangler bilag`, `må avklares`, `allerede bokført`, `mulig duplikat` og `endret/opprettet`.
 
-Bruk denne tabellen:
+Bruk denne tabellen. `Bilag` kombinerer om bilaget er funnet og hvor det kommer fra. `Anbefaling/grunnlag` kombinerer neste handling og usikkerheten beslutningen bygger på. Ikke bruk egen kolonne for faktura- eller kvitteringsnummer; ta det bare med i `Fiken-status` eller `Anbefaling/grunnlag` når det faktisk trengs for beslutningen.
 
-| Dato | Leverandør | Beløp | Fiken-status | Bilag funnet | Bilagskilde | Konto | MVA | Faktura/kvitteringsnr. | Anbefalt handling | Grunnlag/usikkerhet |
-|---|---|---:|---|---|---|---|---|---|---|---|
-| YYYY-MM-DD | Leverandørnavn | NOK 0,00 | må avklares | delvis | Fiken EHF-varsel | må avklares | må avklares | 12345 | Be bruker laste opp/hente original PDF | Varsel lest, men original EHF/PDF ikke hentet |
+| Dato | Leverandør | Beløp | Fiken-status | Bilag | Konto | MVA | Anbefaling/grunnlag |
+|---|---|---:|---|---|---|---|---|
+| YYYY-MM-DD | Leverandørnavn | NOK 0,00 | må avklares | delvis: Fiken EHF-varsel | må avklares | må avklares | Be bruker laste opp/hente original PDF. Varsel lest, men original EHF/PDF ikke hentet |
 
 Etter tabellen skal neste steg beskrives i vanlig språk. Ikke vis interne CLI-kommandoer, JSON-payloads eller filnavn for payload-filer med mindre brukeren eksplisitt ber om tekniske detaljer.

@@ -107,12 +107,12 @@ For kjøp, leverandørfaktura, EHF-varsel, kortkjøp og kvitteringsjakt:
 5. Kjør registrerbare kjøpskandidater gjennom `regnskap fiken prepare-purchase` før write-kommandoer. Bruk `--json` direkte eller en midlertidig fil under `/tmp`; ikke lagre interne kandidat- eller payload-filer i Drive/arbeidsmappen med mindre brukeren ber om det. Preflighten normaliserer Fiken-payload, MVA-beløp, KID/forfall, kontaktstatus, duplikatfunn og vedleggsstatus, men skriver ingenting.
 6. Avslutt med et beslutningsgrunnlag, ikke bare en narrativ oppsummering. Tabellen skal bare inneholde linjer som fortsatt trenger brukerens beslutning/handling eller linjer som faktisk ble endret/opprettet.
 7. Ikke ta med allerede bokførte kontrollsaker, historiske avvik eller kreditnota-/faktura-forvirring i føringstabellen når brukeren ber om å føre nye fakturaer. Nevn dem bare hvis de blokkerer den konkrete føringen eller brukeren eksplisitt spør.
-8. Bruk presis bilagskilde i tabellen: `leverandør-PDF`, `e-postkvittering`, `e-postkvittering dokumentert som PDF`, `Fiken inbox`, `Fiken EHF`, `Fiken EHF-varsel` eller `mangler bilag`.
+8. Bruk presis bilagsproveniens i tabellen: `leverandør-PDF`, `e-postkvittering`, `e-postkvittering dokumentert som PDF`, `Fiken inbox`, `Fiken EHF`, `Fiken EHF-varsel` eller `mangler bilag`. Kombiner om bilag er funnet og hvor det kommer fra i samme kolonne.
 9. Tabellen skal ha disse kolonnene:
 
-| Dato | Leverandør | Beløp | Fiken-status | Bilag funnet | Bilagskilde | Konto | MVA | Faktura/kvitteringsnr. | Anbefalt handling | Grunnlag/usikkerhet |
-|---|---|---:|---|---|---|---|---|---|---|---|
-| YYYY-MM-DD | Leverandørnavn | NOK 0,00 | må avklares | delvis | Fiken EHF-varsel | må avklares | må avklares | 12345 | Be bruker laste opp/hente original PDF | Varsel lest, men original EHF/PDF ikke hentet |
+| Dato | Leverandør | Beløp | Fiken-status | Bilag | Konto | MVA | Anbefaling/grunnlag |
+|---|---|---:|---|---|---|---|---|
+| YYYY-MM-DD | Leverandørnavn | NOK 0,00 | må avklares | delvis: Fiken EHF-varsel | må avklares | må avklares | Be bruker laste opp/hente original PDF. Varsel lest, men original EHF/PDF ikke hentet |
 
 Etter tabellen skal neste steg beskrives i vanlig språk. Ikke vis interne CLI-kommandoer, JSON-payloads eller filnavn for payload-filer med mindre brukeren eksplisitt ber om tekniske detaljer.
 
