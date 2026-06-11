@@ -120,6 +120,33 @@ def test_folio_upload_attachment_is_dry_run(tmp_path: Path, capsys) -> None:
     assert payload["path"] == "/events/event-id/attachments"
 
 
+def test_folio_create_payment_is_dry_run(capsys) -> None:
+    payment = {
+        "creditor": {"name": "Leverandør AS", "accountNumber": "12345678901"},
+        "debtorAccountNumber": "98765432109",
+        "currencyAmount": {"amount": "1000.00", "currency": "NOK"},
+        "executionDate": "2026-06-11",
+        "kid": "123456789",
+    }
+    code = main(["folio", "create-payment", "--json", json.dumps(payment)])
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["dry_run"] is True
+    assert payload["method"] == "POST"
+    assert payload["path"] == "/payments"
+    assert payload["json"] == payment
+    assert "bankutkast" in payload["warning"]
+
+
+def test_folio_cancel_payment_is_dry_run(capsys) -> None:
+    code = main(["folio", "cancel-payment", "payment-id"])
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["dry_run"] is True
+    assert payload["method"] == "DELETE"
+    assert payload["path"] == "/payments/payment-id"
+
+
 def test_docs_add_and_search(tmp_path: Path, monkeypatch, capsys) -> None:
     data_home = tmp_path / "data"
     monkeypatch.setenv("XDG_DATA_HOME", str(data_home))

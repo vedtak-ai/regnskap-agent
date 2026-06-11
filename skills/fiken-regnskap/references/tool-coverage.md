@@ -51,16 +51,18 @@ Rå `post` og `patch` er også dry-run som standard.
 | Hent saldo | `regnskap folio balance <account-number> <date>` |
 | List events | `regnskap folio events --start-date <date>` |
 | List betalinger | `regnskap folio payments --start-date <date>` |
+| Opprett betaling som bankutkast | `regnskap folio create-payment --json-file payment.json` |
+| Kanseller betaling | `regnskap folio cancel-payment <payment-id>` |
 | Hent vedlegg | `regnskap folio attachment <id> --output <file>` |
 | Last opp event-vedlegg | `regnskap folio upload-attachment <event-id> --file <file>` |
 | Les fra Folio API | `regnskap folio get /path --filter key=value` |
 
-Folio betaling-write er ikke eksponert. Event-vedlegg er dry-run som standard.
+Folio betaling-write og event-vedlegg er dry-run som standard.
 Kortkjøpsavstemming er read-only og matcher Folio-events mot Fiken-kjøp, kjøpsutkast og inbox. Den bruker ikke hardkodede merchant-regler for konto eller MVA.
 
 ## Ikke løst ennå
 
 - Hard teknisk approval-gate inne i CLI utover `--execute`.
 - Automatisk parsing av alle PDF-varianter. Agenten gjør parsing, CLI-en gjør API-kall.
-- Konkrete Folio-write-workflows for betalinger og event-oppdateringer er ikke lagt inn.
+- Andre Folio-write-workflows for overføringer, kortendringer og event-oppdateringer er ikke lagt inn.
 - ZP er ikke koblet fordi provider og API ikke er identifisert i arbeidsmappen. Arkitekturen bør utvides med en egen provider når ZP betyr konkret system og autentisering er avklart.

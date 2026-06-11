@@ -82,9 +82,12 @@ regnskap folio transactions --start-date 2026-05-01 --end-date 2026-05-31
 regnskap folio account-transactions <account-number> --start-date 2026-05-01
 regnskap folio balance <account-number> 2026-05-31
 regnskap folio events --start-date 2026-05-01 --include-merchants --include-agents
+regnskap folio payments --start-date 2026-05-01 --include-agents
+regnskap folio create-payment --json-file payment.json
+regnskap folio cancel-payment <payment-id>
 ```
 
-CLI-en har raw `regnskap folio get /path` for nye read-endepunkter. Betalingsoppretting og andre bank-write-operasjoner er ikke lagt inn som kommandoer. Vedlegg på events støttes som dry-run først:
+CLI-en har raw `regnskap folio get /path` for nye read-endepunkter. Betalingsoppretting, kansellering av betalinger og vedlegg på events støttes som dry-run først. Andre bank-write-operasjoner er ikke lagt inn som kommandoer:
 
 ```bash
 regnskap folio upload-attachment <event-id> --file ./receipt.pdf

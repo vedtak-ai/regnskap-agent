@@ -48,11 +48,13 @@ Saldo:
 regnskap folio balance <account-number> 2026-05-31
 ```
 
-Events og betalinger som lesedata:
+Events og betalinger:
 ```bash
 regnskap folio events --start-date 2026-05-01 --include-merchants --include-agents --include-cards
 regnskap folio payments --start-date 2026-05-01 --include-agents
 regnskap folio payment <payment-id>
+regnskap folio create-payment --json-file payment.json
+regnskap folio cancel-payment <payment-id>
 ```
 
 Regnskapskategori:
@@ -73,7 +75,8 @@ regnskap folio get /path --filter key=value
 
 ## Regler
 
-- Ikke initier betalinger, overføringer, kortendringer eller andre bank-write-operasjoner. Betalingsoppretting finnes i Folio API-et, men CLI-en skal ikke eksponere det før workflowen er eksplisitt designet med approval-gate.
+- Betalingsoppretting og kansellering er dry-run som standard. Bruk `--execute` bare etter eksplisitt godkjenning fra brukeren i samme samtale. `create-payment` oppretter Folio-betaling som bankutkast, ikke en generell bankoverføring utenfor Folio sitt betalingsobjekt.
+- Ikke initier overføringer, kortendringer eller andre bank-write-operasjoner.
 - `upload-attachment` er dry-run som standard. Bruk `--execute` kun etter eksplisitt godkjenning.
 - Bruk Folio-data til bankavstemming, transaksjonsoversikt og manglende bilag. Bruk Fiken som regnskapssystem og kilde for bokføringsstatus.
 - Ved kortkjøp og kvitteringsjakt, start med `regnskap reconcile card-purchases --start-date <date> --end-date <date> --only-needs-action` for å få en kompakt arbeidsliste på tvers av Folio og Fiken.

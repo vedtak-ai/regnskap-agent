@@ -45,7 +45,7 @@ Bruk `regnskap`-CLI-en som deterministisk lag mot Fiken API og, når konfigurert
 - For Altinn, MVA-melding, årsoppgjør, lønn, skatt og bankavstemming: hjelp med kontroll og dokumentasjon, men ikke send eller lever på vegne av brukeren.
 - For kortkjøp fra Folio: start med `regnskap reconcile card-purchases`, særlig når brukeren ber om kjøp, korttransaksjoner, kvitteringer eller manglende bilag. Bruk rapporten som arbeidsliste før du søker i Gmail eller gjør Fiken-write.
 - Ikke hardkod merchant-navn til konto/MVA-regler. Bruk bilaget, Fikens kontohjelp og relevant dokumentasjon for vurderingen.
-- For Folio: bruk read-only kommandoer til avstemming og kontroll. Ikke initier betalinger eller andre bank-write-operasjoner.
+- For Folio: bruk read-only kommandoer til avstemming og kontroll. Betalinger kan bare opprettes eller kanselleres med egne dry-run-kommandoer, og `--execute` krever eksplisitt godkjenning fra brukeren i samme samtale. Ikke initier andre bank-write-operasjoner.
 - Folio v2-dokumentasjonen finnes i CLI-en med `regnskap folio docs`. Bruk eksplisitte Folio-kommandoer for kontoer, transaksjoner, events, betalinger som lesedata og vedlegg.
 
 ## Vanlige Kommandoer
@@ -92,6 +92,14 @@ regnskap folio transactions --start-date 2026-05-01 --end-date 2026-05-31
 regnskap folio account-transactions <account-number> --start-date 2026-05-01
 regnskap folio events --start-date 2026-05-01 --include-merchants --include-agents
 regnskap reconcile card-purchases --start-date 2026-05-01 --end-date 2026-05-31 --only-needs-action
+```
+
+Folio betalinger:
+```bash
+regnskap folio payments --start-date 2026-05-01 --include-agents
+regnskap folio payment <payment-id>
+regnskap folio create-payment --json-file payment.json
+regnskap folio cancel-payment <payment-id>
 ```
 
 Kortkjøpsrapporten matcher Folio-events mot Fiken-kjøp, kjøpsutkast og inbox. Den kan gi status som `booked`, `booked_missing_attachment`, `purchase_draft`, `inbox_possible_match`, `ready_to_book` og `missing_receipt`, samt Gmail-søk for kvittering. Den foreslår ikke konto/MVA basert på merchants.
