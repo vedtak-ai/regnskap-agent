@@ -80,6 +80,8 @@ WRITE_COMMANDS = {
     "create-contact",
     "invoice-draft",
     "purchase",
+    "folio-create-payment",
+    "folio-cancel-payment",
 }
 
 
@@ -314,6 +316,16 @@ def add_folio_commands(sub: argparse._SubParsersAction[argparse.ArgumentParser])
     payment = sub.add_parser("payment", help="Hent én Folio-betaling")
     payment.add_argument("id")
     payment.set_defaults(func=cmd_folio_payment)
+
+    create_payment = sub.add_parser("create-payment", help="Opprett Folio-betaling som bankutkast")
+    add_json_body(create_payment)
+    add_execute(create_payment)
+    create_payment.set_defaults(func=cmd_folio_create_payment)
+
+    cancel_payment = sub.add_parser("cancel-payment", help="Kanseller Folio-betaling")
+    cancel_payment.add_argument("id")
+    add_execute(cancel_payment)
+    cancel_payment.set_defaults(func=cmd_folio_cancel_payment)
 
     category = sub.add_parser("category", help="Hent Folio-regnskapskategori")
     category.add_argument("id")
@@ -571,6 +583,42 @@ def cmd_folio_payments(args: argparse.Namespace) -> int:
 
 def cmd_folio_payment(args: argparse.Namespace) -> int:
     print_response(folio_client_from_config().get(f"/payments/{args.id}"))
+    return 0
+
+
+def cmd_folio_create_payment(args: argparse.Namespace) -> int:
+    payload = read_json_arg(args)
+    path = "/payments"
+    if not args.execute:
+        print_json(
+            {
+                "ok": True,
+                "dry_run": True,
+                "method": "POST",
+                "path": path,
+                "json": payload,
+                "warning": "Oppretter Folio-betaling som bankutkast ved --execute. Krever eksplisitt bruker-godkjenning.",
+            }
+        )
+        return 0
+    print_response(folio_client_from_config().request("POST", path, body=payload))
+    return 0
+
+
+def cmd_folio_cancel_payment(args: argparse.Namespace) -> int:
+    path = f"/payments/{args.id}"
+    if not args.execute:
+        print_json(
+            {
+                "ok": True,
+                "dry_run": True,
+                "method": "DELETE",
+                "path": path,
+                "warning": "Kansellerer Folio-betaling ved --execute. Krever eksplisitt bruker-godkjenning.",
+            }
+        )
+        return 0
+    print_response(folio_client_from_config().request("DELETE", path))
     return 0
 
 
