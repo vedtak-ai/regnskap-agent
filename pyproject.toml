@@ -1,6 +1,6 @@
 [project]
 name = "regnskap-agent"
-version = "0.1.15"
+version = "0.1.16"
 description = "CLI og Codex-skill for trygge Fiken-regnskapsworkflows"
 readme = "README.md"
 requires-python = ">=3.11"

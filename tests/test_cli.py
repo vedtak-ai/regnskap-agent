@@ -76,6 +76,98 @@ def test_folio_setup_uses_default_base_url(tmp_path: Path, monkeypatch, capsys) 
     assert payload["folio_base_url"] == "https://api.folio.no/v2"
 
 
+def test_tripletex_setup_reads_tokens_from_stdin(tmp_path: Path, monkeypatch, capsys) -> None:
+    config_home = tmp_path / "config"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+    monkeypatch.setattr("sys.stdin", type("Input", (), {"read": lambda self: "consumer\nemployee\n"})())
+
+    code = main(["tripletex", "setup", "--consumer-token-stdin", "--employee-token-stdin", "--company-id", "123"])
+
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["tripletex_company_id"] == "123"
+    saved = json.loads((config_home / "regnskap-agent" / "config.json").read_text())
+    assert saved["tripletex_consumer_token"] == "consumer"
+    assert saved["tripletex_employee_token"] == "employee"
+    assert saved["tripletex_company_id"] == "123"
+
+
+def test_tripletex_doctor_reports_env(monkeypatch, capsys) -> None:
+    monkeypatch.setenv("TRIPLETEX_CONSUMER_TOKEN", "consumer")
+    monkeypatch.setenv("TRIPLETEX_EMPLOYEE_TOKEN", "employee")
+    monkeypatch.setenv("TRIPLETEX_COMPANY_ID", "123")
+
+    code = main(["tripletex", "doctor"])
+
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["has_tokens"] is True
+    assert payload["token_source"] == "env"
+    assert payload["company_id"] == "123"
+
+
+def test_tripletex_salary_transaction_is_dry_run(capsys) -> None:
+    payload = {"date": "2026-06-30", "year": 2026, "month": 6, "payslips": []}
+
+    code = main(["tripletex", "salary-transaction", "--json", json.dumps(payload)])
+
+    assert code == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["dry_run"] is True
+    assert result["provider"] == "tripletex"
+    assert result["path"] == "/salary/transaction"
+    assert result["json"] == payload
+
+
+def test_tripletex_raw_put_is_dry_run(capsys) -> None:
+    code = main(["tripletex", "put", "/supplierInvoice/1/:approve", "--filter", "comment=ok"])
+
+    assert code == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["dry_run"] is True
+    assert result["method"] == "PUT"
+    assert result["params"] == {"comment": "ok"}
+
+
+def test_unimicro_setup_reads_token_from_stdin(tmp_path: Path, monkeypatch, capsys) -> None:
+    config_home = tmp_path / "config"
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(config_home))
+    monkeypatch.setattr("sys.stdin", type("Input", (), {"read": lambda self: "uni-token\n"})())
+
+    code = main(["unimicro", "setup", "--token-stdin", "--company-key", "company-key"])
+
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["unimicro_company_key"] == "company-key"
+    saved = json.loads((config_home / "regnskap-agent" / "config.json").read_text())
+    assert saved["unimicro_api_token"] == "uni-token"
+    assert saved["unimicro_company_key"] == "company-key"
+
+
+def test_unimicro_journal_entry_is_dry_run(capsys) -> None:
+    payload = [{"DraftLines": [{"AccountID": 1, "Amount": 10.0, "Description": "Test", "FinancialDate": "2026-06-01"}]}]
+
+    code = main(["unimicro", "journal-entry", "--json", json.dumps(payload)])
+
+    assert code == 0
+    result = json.loads(capsys.readouterr().out)
+    assert result["dry_run"] is True
+    assert result["provider"] == "unimicro"
+    assert result["path"] == "/api/biz/journalentries"
+    assert result["params"] == {"action": "book-journal-entries"}
+
+
+def test_providers_capabilities_can_use_tripletex_fixture(tmp_path: Path, capsys) -> None:
+    openapi = tmp_path / "tripletex.json"
+    openapi.write_text(json.dumps({"info": {"version": "x"}, "paths": {"/salary/transaction": {"post": {}}}}), encoding="utf-8")
+
+    code = main(["providers", "capabilities", "--provider", "tripletex", "--tripletex-openapi-file", str(openapi)])
+
+    assert code == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["providers"]["tripletex"]["modules"]["salary"]["write"] is True
+
+
 def test_fiken_client_uses_certifi_ssl_context(monkeypatch) -> None:
     contexts = []
 

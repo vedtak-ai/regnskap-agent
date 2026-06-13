@@ -1,6 +1,6 @@
 # Workflow Coverage
 
-Denne CLI-en dekker vanlige Fiken-workflows og gjør write-operasjoner som dry-run som standard.
+Denne CLI-en dekker vanlige Fiken-, Folio-, Tripletex- og UniMicro-workflows og gjør write-operasjoner som dry-run som standard.
 
 ## Dekket som eksplisitte kommandoer
 
@@ -60,9 +60,68 @@ Rå `post` og `patch` er også dry-run som standard.
 Folio betaling-write og event-vedlegg er dry-run som standard.
 Kortkjøpsavstemming er read-only og matcher Folio-events mot Fiken-kjøp, kjøpsutkast og inbox. Den bruker ikke hardkodede merchant-regler for konto eller MVA.
 
+## Tripletex
+
+Start alltid med kapabiliteter når Tripletex er aktuell:
+
+```bash
+regnskap tripletex capabilities
+```
+
+| Workflow | Kommando |
+|---|---|
+| Sjekk Tripletex-oppsett | `regnskap tripletex doctor` |
+| Lagre Tripletex tokens | `regnskap tripletex setup --consumer-token-stdin --employee-token-stdin` |
+| Hent session-info | `regnskap tripletex whoami` |
+| List kjent ressurs | `regnskap tripletex list <resource>` |
+| Les native API-path | `regnskap tripletex get /path --filter key=value` |
+| Rå Tripletex write | `regnskap tripletex post/put/delete /path ...` |
+| Last ned PDF | `regnskap tripletex pdf supplier-invoice|voucher|payslip <id> --output <file>` |
+| Opprett voucher | `regnskap tripletex voucher --json-file voucher.json` |
+| Legg ved voucher-fil | `regnskap tripletex attach-voucher <id> --file <file>` |
+| Supplier invoice action | `regnskap tripletex supplier-invoice-action approve|reject|add-payment ...` |
+| Forbered salary transaction | `regnskap tripletex prepare-salary-transaction --json-file salary.json` |
+| Opprett salary transaction | `regnskap tripletex salary-transaction --json-file salary.json` |
+| Legg ved salary-fil | `regnskap tripletex attach-salary-transaction <id> --file <file>` |
+
+Tripletex salary-støtte betyr dokumenterte `salary/transaction`-operasjoner og tilhørende lesedata/vedlegg. Ikke kall dette en komplett lønnskjøring hvis `capabilities` ikke viser et konkret payroll-run-endepunkt.
+
+## UniMicro
+
+Start alltid med kapabiliteter når UniMicro er aktuell:
+
+```bash
+regnskap unimicro capabilities
+```
+
+| Workflow | Kommando |
+|---|---|
+| Sjekk UniMicro-oppsett | `regnskap unimicro doctor` |
+| Lagre UniMicro token | `regnskap unimicro setup --token-stdin --company-key <key>` |
+| List kjent ressurs | `regnskap unimicro list <resource>` |
+| Les native API-path | `regnskap unimicro get /path --filter key=value` |
+| Rå UniMicro write | `regnskap unimicro post/put/delete /path ...` |
+| Forbered supplier invoice | `regnskap unimicro prepare-supplier-invoice --json-file supplier-invoice.json` |
+| Opprett supplier invoice | `regnskap unimicro supplier-invoice --json-file supplier-invoice.json` |
+| Send supplier invoice til approval | `regnskap unimicro assign-supplier-invoice <id> --json-file approval.json` |
+| Forbered journal entry | `regnskap unimicro prepare-journal-entry --json-file journal.json` |
+| Book journal entry | `regnskap unimicro journal-entry --json-file journal.json` |
+| Last opp fil | `regnskap unimicro upload-file --file <file> --entity-type SupplierInvoice --entity-id <id>` |
+| Link fil | `regnskap unimicro link-file <file-id> --entity-type SupplierInvoice --entity-id <id>` |
+| OCR-analyser fil | `regnskap unimicro ocr-file <file-id>` |
+
+UniMicro payroll er ikke verifisert som write-støttet i CLI-en. Bruk `capabilities` og faktisk provider-doc før payroll antas.
+
+## Provider-kapabiliteter
+
+| Workflow | Kommando |
+|---|---|
+| Samlet kapabilitetsrapport | `regnskap providers capabilities` |
+| Én provider | `regnskap providers capabilities --provider tripletex|unimicro` |
+
 ## Ikke løst ennå
 
 - Hard teknisk approval-gate inne i CLI utover `--execute`.
 - Automatisk parsing av alle PDF-varianter. Agenten gjør parsing, CLI-en gjør API-kall.
 - Andre Folio-write-workflows for overføringer, kortendringer og event-oppdateringer er ikke lagt inn.
-- ZP er ikke koblet fordi provider og API ikke er identifisert i arbeidsmappen. Arkitekturen bør utvides med en egen provider når ZP betyr konkret system og autentisering er avklart.
+- UniMicro payroll-write er ikke verifisert uten app-/swagger-kontekst.

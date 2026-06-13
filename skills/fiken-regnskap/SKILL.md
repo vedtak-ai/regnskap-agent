@@ -1,11 +1,11 @@
 ---
 name: fiken-regnskap
-description: "Bruk Regnskap Agent CLI for trygge Fiken- og Folio-regnskapsworkflows: lese Fiken-data, lese bankdata fra Folio når API er konfigurert, laste opp bilag, lage fakturautkast, opprette kontakter, foreslå kjøpsføringer, sjekke duplikater og rapportere regnskapsstatus. Bruk når brukeren nevner Fiken, Folio, regnskap, bilag, kvitteringer, faktura, MVA, bankavstemming, superføring, kjøp, salg, leverandører eller ønsker en CLI-basert agentflyt for regnskap."
+description: "Bruk Regnskap Agent CLI for trygge Fiken-, Folio-, Tripletex- og UniMicro-regnskapsworkflows: lese regnskapsdata, lese bankdata, laste opp bilag, lage utkast, opprette kontakter, foreslå kjøpsføringer, sjekke duplikater, forberede salary transactions og rapportere regnskapsstatus. Bruk når brukeren nevner Fiken, Folio, Tripletex, UniMicro, regnskap, bilag, kvitteringer, faktura, MVA, bankavstemming, superføring, kjøp, salg, leverandører eller ønsker en CLI-basert agentflyt for regnskap."
 ---
 
 # Fiken Regnskap
 
-Bruk `regnskap`-CLI-en som deterministisk lag mot Fiken API og, når konfigurert, Folio API. Agenten skal gjøre vurdering, avstemming og kontroll, mens CLI-en skal gjøre API-kallene.
+Bruk `regnskap`-CLI-en som deterministisk lag mot Fiken, Folio, Tripletex og UniMicro. Agenten skal gjøre vurdering, avstemming og kontroll, mens CLI-en skal gjøre API-kallene.
 
 ## Oppstart
 
@@ -33,6 +33,12 @@ Bruk `regnskap`-CLI-en som deterministisk lag mot Fiken API og, når konfigurert
    ```bash
    regnskap folio doctor
    ```
+7. Hvis Tripletex eller UniMicro skal brukes, start med provider-kapabiliteter før du velger write/read-kommando:
+   ```bash
+   regnskap providers capabilities
+   regnskap tripletex capabilities
+   regnskap unimicro capabilities
+   ```
 
 ## Sikkerhetsregler
 
@@ -47,6 +53,9 @@ Bruk `regnskap`-CLI-en som deterministisk lag mot Fiken API og, når konfigurert
 - Ikke hardkod merchant-navn til konto/MVA-regler. Bruk bilaget, Fikens kontohjelp og relevant dokumentasjon for vurderingen.
 - For Folio: bruk read-only kommandoer til avstemming og kontroll. Betalinger kan bare opprettes eller kanselleres med egne dry-run-kommandoer, og `--execute` krever eksplisitt godkjenning fra brukeren i samme samtale. Ikke initier andre bank-write-operasjoner.
 - Folio v2-dokumentasjonen finnes i CLI-en med `regnskap folio docs`. Bruk eksplisitte Folio-kommandoer for kontoer, transaksjoner, events, betalinger som lesedata og vedlegg.
+- For Tripletex og UniMicro: start med `regnskap providers capabilities` eller providerens `capabilities`. Bruk provider-spesifikke kommandoer, ikke Fiken docs/kontohjelp, når selskapet/flyten ligger i Tripletex eller UniMicro.
+- For Tripletex lønn: CLI-en kan forberede og skrive `salary/transaction` der OpenAPI dokumenterer det, men dette er ikke automatisk en komplett lønnskjøring. Ikke påstå at payroll-run, Altinn, A-melding eller ID-porten-submission er støttet med mindre `capabilities` viser et konkret dokumentert endepunkt.
+- For UniMicro payroll: behandle payroll som ukjent/ikke verifisert til `capabilities` eller faktisk provider-doc bekrefter konkrete endepunkter. Ikke kjør lønn i UniMicro fra antakelser.
 
 ## Vanlige Kommandoer
 
@@ -100,6 +109,32 @@ regnskap folio payments --start-date 2026-05-01 --include-agents
 regnskap folio payment <payment-id>
 regnskap folio create-payment --json-file payment.json
 regnskap folio cancel-payment <payment-id>
+```
+
+Provider-kapabiliteter:
+```bash
+regnskap providers capabilities
+regnskap tripletex capabilities
+regnskap unimicro capabilities
+```
+
+Tripletex:
+```bash
+regnskap tripletex doctor
+regnskap tripletex list accounts
+regnskap tripletex list supplier-invoices
+regnskap tripletex list salary-types
+regnskap tripletex prepare-salary-transaction --json-file salary.json
+regnskap tripletex salary-transaction --json-file salary.json
+```
+
+UniMicro:
+```bash
+regnskap unimicro doctor
+regnskap unimicro list supplier-invoices
+regnskap unimicro list journal-entries
+regnskap unimicro prepare-supplier-invoice --json-file supplier-invoice.json
+regnskap unimicro prepare-journal-entry --json-file journal.json
 ```
 
 Kortkjøpsrapporten matcher Folio-events mot Fiken-kjøp, kjøpsutkast og inbox. Den kan gi status som `booked`, `booked_missing_attachment`, `purchase_draft`, `inbox_possible_match`, `ready_to_book` og `missing_receipt`, samt Gmail-søk for kvittering. Den foreslår ikke konto/MVA basert på merchants.

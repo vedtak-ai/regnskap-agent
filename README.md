@@ -1,12 +1,12 @@
 # Regnskap Agent
 
-CLI og Codex-skill for Fiken-baserte regnskapsworkflows.
+CLI og Codex-skill for provider-baserte regnskapsworkflows.
 
 Målet er å flytte skjøre regnskapsoperasjoner fra nettleserklikk til en enkel, installerbar CLI. Agenten bruker skillen til å analysere bilag, velge riktig workflow og kjøre CLI-en med `--dry-run` før alle skriveoperasjoner.
 
 ## Designvalg
 
-Denne løsningen er en vanlig CLI som kan installeres hos hvem som helst, med eksplisitte kommandoer for de vanligste workflowene og rå `get/post/patch` for full Fiken API-dekning. Skillen ligger oppå og gir agenten arbeidsregler, duplikatsjekk og menneske-i-løkken.
+Denne løsningen er en vanlig CLI som kan installeres hos hvem som helst, med eksplisitte kommandoer for de vanligste workflowene og rå `get/post/put/delete` der providerne støtter det. Skillen ligger oppå og gir agenten arbeidsregler, duplikatsjekk og menneske-i-løkken.
 
 ## Installer lokalt
 
@@ -92,6 +92,79 @@ CLI-en har raw `regnskap folio get /path` for nye read-endepunkter. Betalingsopp
 ```bash
 regnskap folio upload-attachment <event-id> --file ./receipt.pdf
 ```
+
+## Tripletex
+
+Tripletex settes opp som egen provider. Den bruker consumer token og employee token til å hente session token, og session token caches lokalt til utløpsdato.
+
+```bash
+regnskap tripletex setup --consumer-token-stdin --employee-token-stdin --company-id 0
+regnskap tripletex doctor
+regnskap tripletex capabilities
+regnskap tripletex list accounts
+regnskap tripletex list supplier-invoices
+regnskap tripletex list salary-types
+regnskap tripletex list payslips
+regnskap tripletex list bank-reconciliations
+```
+
+Rå API-dekning finnes for nye endepunkter:
+
+```bash
+regnskap tripletex get /supplierInvoice
+regnskap tripletex post /ledger/voucher --json-file voucher.json
+regnskap tripletex put /supplierInvoice/123/:approve --filter comment=ok
+```
+
+Alle Tripletex-write-kommandoer er dry-run uten `--execute`. Lønn støttes der Tripletex OpenAPI dokumenterer det, først som `salary/transaction` og vedlegg. CLI-en later ikke som den kan kjøre en komplett lønnskjøring hvis OpenAPI-en ikke har et dokumentert payroll-run-endepunkt.
+
+```bash
+regnskap tripletex prepare-salary-transaction --json-file salary.json
+regnskap tripletex salary-transaction --json-file salary.json
+regnskap tripletex attach-salary-transaction <id> --file ./grunnlag.pdf
+```
+
+## UniMicro
+
+UniMicro settes opp med API-token, company key og base URL-er for API og filserver.
+
+```bash
+regnskap unimicro setup --token-stdin --company-key <company-key>
+regnskap unimicro doctor
+regnskap unimicro capabilities
+regnskap unimicro list supplier-invoices
+regnskap unimicro list journal-entries
+regnskap unimicro list accounts
+regnskap unimicro list vat-types
+```
+
+Før write kan agenten normalisere leverandørfaktura eller journal entry:
+
+```bash
+regnskap unimicro prepare-supplier-invoice --json-file supplier-invoice.json
+regnskap unimicro prepare-journal-entry --json-file journal.json --accounts-json-file accounts.json --vattypes-json-file vattypes.json
+```
+
+Write-kommandoer er dry-run uten `--execute`, inkludert supplier invoice, journal entry, filopplasting, file-link og approval assignment.
+
+```bash
+regnskap unimicro supplier-invoice --json-file supplier-invoice.json
+regnskap unimicro journal-entry --json-file journal.json
+regnskap unimicro upload-file --file ./bilag.pdf --entity-type SupplierInvoice --entity-id 123
+regnskap unimicro ocr-file <file-id>
+```
+
+## Provider-kapabiliteter
+
+Før agenten bruker Tripletex eller UniMicro bør den hente kapabiliteter:
+
+```bash
+regnskap providers capabilities
+regnskap providers capabilities --provider tripletex
+regnskap providers capabilities --provider unimicro
+```
+
+Dette viser hvilke moduler som har read, write, attachments, approval, payroll/salary, bankavstemming og hvilke begrensninger som gjelder.
 
 ## Avstemming av kortkjøp
 

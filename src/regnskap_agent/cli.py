@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+import os
 import ssl
 import sys
 import urllib.request
@@ -14,11 +15,22 @@ import certifi
 from .config import (
     Config,
     DEFAULT_FOLIO_BASE_URL,
+    DEFAULT_TRIPLETEX_BASE_URL,
+    DEFAULT_UNIMICRO_API_BASE_URL,
+    DEFAULT_UNIMICRO_FILE_BASE_URL,
     load_config,
     resolve_company,
     resolve_folio_base_url,
     resolve_folio_token,
     resolve_token,
+    resolve_tripletex_base_url,
+    resolve_tripletex_company_id,
+    resolve_tripletex_consumer_token,
+    resolve_tripletex_employee_token,
+    resolve_unimicro_api_base_url,
+    resolve_unimicro_api_token,
+    resolve_unimicro_company_key,
+    resolve_unimicro_file_base_url,
     save_config,
 )
 from .docs import (
@@ -38,8 +50,22 @@ from .fiken import FikenClient, FikenError, company_path
 from .folio import API_DOCS_URL as FOLIO_API_DOCS_URL
 from .folio import OPENAPI_URL as FOLIO_OPENAPI_URL
 from .folio import FolioClient, FolioError
+from .http_client import ApiError
+from .provider_prepare import (
+    prepare_salary_transaction,
+    prepare_unimicro_journal_entry,
+    prepare_unimicro_supplier_invoice,
+)
 from .purchase_prepare import duplicate_date_window, prepare_purchase
 from .reconcile import default_start_date, reconcile_card_purchases, today_iso
+from .tripletex import (
+    OPENAPI_URL as TRIPLETEX_OPENAPI_URL,
+    TRIPLETEX_RESOURCE_ALIASES,
+    TripletexClient,
+    detect_tripletex_capabilities,
+    session_is_valid,
+)
+from .unimicro import UNIMICRO_RESOURCE_ALIASES, UniMicroClient, unimicro_capabilities
 
 
 FIKEN_OPENAPI_URL = "https://api.fiken.no/api/v2/docs/swagger.yaml"
@@ -99,6 +125,9 @@ def main(argv: list[str] | None = None) -> int:
     except FolioError as exc:
         print_json({"ok": False, "error": str(exc), "status": exc.status})
         return 2
+    except ApiError as exc:
+        print_json({"ok": False, "provider": exc.provider, "error": str(exc), "status": exc.status})
+        return 2
     except Exception as exc:
         print_json({"ok": False, "error": str(exc)})
         return 1
@@ -137,6 +166,18 @@ def build_parser() -> argparse.ArgumentParser:
     folio_sub = folio.add_subparsers(dest="folio_command")
     add_folio_commands(folio_sub)
 
+    tripletex = sub.add_parser("tripletex", help="Tripletex provider")
+    tripletex_sub = tripletex.add_subparsers(dest="tripletex_command")
+    add_tripletex_commands(tripletex_sub)
+
+    unimicro = sub.add_parser("unimicro", help="UniMicro provider")
+    unimicro_sub = unimicro.add_subparsers(dest="unimicro_command")
+    add_unimicro_commands(unimicro_sub)
+
+    providers = sub.add_parser("providers", help="Sammenlign provider-kapabiliteter")
+    providers_sub = providers.add_subparsers(dest="providers_command")
+    add_provider_commands(providers_sub)
+
     reconcile = sub.add_parser("reconcile", help="Avstem og prioriter regnskapsarbeid på tvers av kilder")
     reconcile_sub = reconcile.add_subparsers(dest="reconcile_command")
     add_reconcile_commands(reconcile_sub)
@@ -174,6 +215,12 @@ def add_execute(parser: argparse.ArgumentParser) -> None:
 
 def add_json_body(parser: argparse.ArgumentParser) -> None:
     source = parser.add_mutually_exclusive_group(required=True)
+    source.add_argument("--json", help="JSON-payload som streng")
+    source.add_argument("--json-file", type=Path, help="Fil med JSON-payload")
+
+
+def add_optional_json_body(parser: argparse.ArgumentParser) -> None:
+    source = parser.add_mutually_exclusive_group(required=False)
     source.add_argument("--json", help="JSON-payload som streng")
     source.add_argument("--json-file", type=Path, help="Fil med JSON-payload")
 
@@ -352,6 +399,204 @@ def add_folio_date_range(parser: argparse.ArgumentParser) -> None:
     parser.add_argument("--end-date", help="Til-dato YYYY-MM-DD")
 
 
+def add_tripletex_commands(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    setup = sub.add_parser("setup", help="Lagre Tripletex tokens og standard company-id")
+    setup.add_argument("--consumer-token")
+    setup.add_argument("--consumer-token-stdin", action="store_true", help="Les consumer token fra stdin")
+    setup.add_argument("--employee-token")
+    setup.add_argument("--employee-token-stdin", action="store_true", help="Les employee token fra stdin")
+    setup.add_argument("--company-id")
+    setup.add_argument("--base-url", default=DEFAULT_TRIPLETEX_BASE_URL)
+    setup.set_defaults(func=cmd_tripletex_setup)
+
+    doctor = sub.add_parser("doctor", help="Sjekk Tripletex-konfigurasjon")
+    doctor.set_defaults(func=cmd_tripletex_doctor)
+
+    capabilities = sub.add_parser("capabilities", help="Rapporter Tripletex API-kapabiliteter")
+    capabilities.add_argument("--openapi-file", type=Path)
+    capabilities.add_argument("--base-url")
+    capabilities.set_defaults(func=cmd_tripletex_capabilities)
+
+    whoami = sub.add_parser("whoami", help="Hent Tripletex session/whoAmI")
+    whoami.add_argument("--company-id")
+    whoami.set_defaults(func=cmd_tripletex_whoami)
+
+    list_cmd = sub.add_parser("list", help="List en kjent Tripletex-ressurs")
+    list_cmd.add_argument("resource", choices=sorted(TRIPLETEX_RESOURCE_ALIASES))
+    list_cmd.add_argument("--filter", action="append", default=[], metavar="KEY=VALUE")
+    list_cmd.set_defaults(func=cmd_tripletex_list)
+
+    get = sub.add_parser("get", help="GET mot Tripletex API-path")
+    get.add_argument("path")
+    get.add_argument("--filter", action="append", default=[], metavar="KEY=VALUE")
+    get.set_defaults(func=cmd_tripletex_get)
+
+    post = sub.add_parser("post", help="POST mot Tripletex API-path")
+    post.add_argument("path")
+    add_json_body(post)
+    post.add_argument("--filter", action="append", default=[], metavar="KEY=VALUE")
+    add_execute(post)
+    post.set_defaults(func=cmd_tripletex_post)
+
+    put = sub.add_parser("put", help="PUT mot Tripletex API-path")
+    put.add_argument("path")
+    add_optional_json_body(put)
+    put.add_argument("--filter", action="append", default=[], metavar="KEY=VALUE")
+    add_execute(put)
+    put.set_defaults(func=cmd_tripletex_put)
+
+    delete = sub.add_parser("delete", help="DELETE mot Tripletex API-path")
+    delete.add_argument("path")
+    delete.add_argument("--filter", action="append", default=[], metavar="KEY=VALUE")
+    add_execute(delete)
+    delete.set_defaults(func=cmd_tripletex_delete)
+
+    pdf = sub.add_parser("pdf", help="Last ned Tripletex PDF for supplier-invoice, voucher eller payslip")
+    pdf.add_argument("kind", choices=["supplier-invoice", "voucher", "payslip"])
+    pdf.add_argument("id")
+    pdf.add_argument("--output", required=True, type=Path)
+    pdf.set_defaults(func=cmd_tripletex_pdf)
+
+    voucher = sub.add_parser("voucher", help="Opprett Tripletex voucher")
+    add_json_body(voucher)
+    voucher.add_argument("--send-to-ledger", action=argparse.BooleanOptionalAction, default=None)
+    add_execute(voucher)
+    voucher.set_defaults(func=cmd_tripletex_voucher)
+
+    attach_voucher = sub.add_parser("attach-voucher", help="Legg ved fil på Tripletex voucher")
+    attach_voucher.add_argument("voucher_id")
+    attach_voucher.add_argument("--file", required=True, type=Path)
+    add_execute(attach_voucher)
+    attach_voucher.set_defaults(func=cmd_tripletex_attach_voucher)
+
+    supplier_action = sub.add_parser("supplier-invoice-action", help="Approve/reject/addPayment på Tripletex supplier invoice")
+    supplier_action.add_argument("action", choices=["approve", "reject", "add-payment"])
+    supplier_action.add_argument("--invoice-id")
+    supplier_action.add_argument("--filter", action="append", default=[], metavar="KEY=VALUE")
+    add_execute(supplier_action)
+    supplier_action.set_defaults(func=cmd_tripletex_supplier_invoice_action)
+
+    invoice_payment = sub.add_parser("invoice-payment", help="Marker betaling på Tripletex kundeinvoice")
+    invoice_payment.add_argument("invoice_id")
+    invoice_payment.add_argument("--filter", action="append", default=[], metavar="KEY=VALUE")
+    add_execute(invoice_payment)
+    invoice_payment.set_defaults(func=cmd_tripletex_invoice_payment)
+
+    prepare_salary = sub.add_parser("prepare-salary-transaction", help="Valider Tripletex salary transaction uten å skrive")
+    add_json_body(prepare_salary)
+    prepare_salary.set_defaults(func=cmd_tripletex_prepare_salary_transaction)
+
+    salary = sub.add_parser("salary-transaction", help="Opprett Tripletex salary/transaction")
+    add_json_body(salary)
+    salary.add_argument("--generate-tax-deduction", action=argparse.BooleanOptionalAction, default=None)
+    add_execute(salary)
+    salary.set_defaults(func=cmd_tripletex_salary_transaction)
+
+    attach_salary = sub.add_parser("attach-salary-transaction", help="Legg ved fil på Tripletex salary transaction")
+    attach_salary.add_argument("transaction_id")
+    attach_salary.add_argument("--file", required=True, type=Path)
+    add_execute(attach_salary)
+    attach_salary.set_defaults(func=cmd_tripletex_attach_salary_transaction)
+
+
+def add_unimicro_commands(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    setup = sub.add_parser("setup", help="Lagre UniMicro token, company key og base URLs")
+    setup.add_argument("--token")
+    setup.add_argument("--token-stdin", action="store_true")
+    setup.add_argument("--company-key")
+    setup.add_argument("--api-base-url", default=DEFAULT_UNIMICRO_API_BASE_URL)
+    setup.add_argument("--file-base-url", default=DEFAULT_UNIMICRO_FILE_BASE_URL)
+    setup.set_defaults(func=cmd_unimicro_setup)
+
+    doctor = sub.add_parser("doctor", help="Sjekk UniMicro-konfigurasjon")
+    doctor.set_defaults(func=cmd_unimicro_doctor)
+
+    capabilities = sub.add_parser("capabilities", help="Rapporter UniMicro-kapabiliteter")
+    capabilities.set_defaults(func=cmd_unimicro_capabilities)
+
+    list_cmd = sub.add_parser("list", help="List en kjent UniMicro-ressurs")
+    list_cmd.add_argument("resource", choices=sorted(UNIMICRO_RESOURCE_ALIASES))
+    list_cmd.add_argument("--filter", action="append", default=[], metavar="KEY=VALUE")
+    list_cmd.set_defaults(func=cmd_unimicro_list)
+
+    get = sub.add_parser("get", help="GET mot UniMicro API-path")
+    get.add_argument("path")
+    get.add_argument("--filter", action="append", default=[], metavar="KEY=VALUE")
+    get.set_defaults(func=cmd_unimicro_get)
+
+    post = sub.add_parser("post", help="POST mot UniMicro API-path")
+    post.add_argument("path")
+    add_json_body(post)
+    post.add_argument("--filter", action="append", default=[], metavar="KEY=VALUE")
+    add_execute(post)
+    post.set_defaults(func=cmd_unimicro_post)
+
+    put = sub.add_parser("put", help="PUT mot UniMicro API-path")
+    put.add_argument("path")
+    add_optional_json_body(put)
+    put.add_argument("--filter", action="append", default=[], metavar="KEY=VALUE")
+    add_execute(put)
+    put.set_defaults(func=cmd_unimicro_put)
+
+    delete = sub.add_parser("delete", help="DELETE mot UniMicro API-path")
+    delete.add_argument("path")
+    delete.add_argument("--filter", action="append", default=[], metavar="KEY=VALUE")
+    add_execute(delete)
+    delete.set_defaults(func=cmd_unimicro_delete)
+
+    prepare_supplier = sub.add_parser("prepare-supplier-invoice", help="Valider UniMicro supplier invoice uten write")
+    add_json_body(prepare_supplier)
+    prepare_supplier.set_defaults(func=cmd_unimicro_prepare_supplier_invoice)
+
+    supplier = sub.add_parser("supplier-invoice", help="Opprett UniMicro supplier invoice")
+    add_json_body(supplier)
+    add_execute(supplier)
+    supplier.set_defaults(func=cmd_unimicro_supplier_invoice)
+
+    assign = sub.add_parser("assign-supplier-invoice", help="Send UniMicro supplier invoice til approval")
+    assign.add_argument("invoice_id")
+    add_json_body(assign)
+    add_execute(assign)
+    assign.set_defaults(func=cmd_unimicro_assign_supplier_invoice)
+
+    prepare_journal = sub.add_parser("prepare-journal-entry", help="Valider UniMicro journal entry uten write")
+    add_json_body(prepare_journal)
+    prepare_journal.add_argument("--accounts-json-file", type=Path)
+    prepare_journal.add_argument("--vattypes-json-file", type=Path)
+    prepare_journal.set_defaults(func=cmd_unimicro_prepare_journal_entry)
+
+    journal = sub.add_parser("journal-entry", help="Book UniMicro journal entry")
+    add_json_body(journal)
+    add_execute(journal)
+    journal.set_defaults(func=cmd_unimicro_journal_entry)
+
+    upload = sub.add_parser("upload-file", help="Last opp fil til UniMicro file server")
+    upload.add_argument("--file", required=True, type=Path)
+    upload.add_argument("--entity-id")
+    upload.add_argument("--entity-type")
+    upload.add_argument("--caption")
+    add_execute(upload)
+    upload.set_defaults(func=cmd_unimicro_upload_file)
+
+    link = sub.add_parser("link-file", help="Lenk eksisterende UniMicro-fil til entitet")
+    link.add_argument("file_id")
+    link.add_argument("--entity-type", required=True)
+    link.add_argument("--entity-id", required=True)
+    add_execute(link)
+    link.set_defaults(func=cmd_unimicro_link_file)
+
+    ocr = sub.add_parser("ocr-file", help="Kjør UniMicro OCR-analyse på fil")
+    ocr.add_argument("file_id")
+    ocr.set_defaults(func=cmd_unimicro_ocr_file)
+
+
+def add_provider_commands(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
+    capabilities = sub.add_parser("capabilities", help="Rapporter kapabiliteter for alle eller én provider")
+    capabilities.add_argument("--provider", choices=["tripletex", "unimicro"])
+    capabilities.add_argument("--tripletex-openapi-file", type=Path)
+    capabilities.set_defaults(func=cmd_providers_capabilities)
+
+
 def add_reconcile_commands(sub: argparse._SubParsersAction[argparse.ArgumentParser]) -> None:
     card = sub.add_parser(
         "card-purchases",
@@ -428,12 +673,9 @@ def cmd_setup(args: argparse.Namespace) -> int:
     if not token:
         raise ValueError("Tomt Fiken-token.")
 
-    config = Config(
-        token=token,
-        default_company=args.company or existing.default_company,
-        folio_token=existing.folio_token,
-        folio_base_url=existing.folio_base_url,
-    )
+    existing.token = token
+    existing.default_company = args.company or existing.default_company
+    config = existing
     auto_company_result: dict[str, Any] | None = None
     if args.auto_company and not args.company:
         companies = FikenClient(token).get_paginated("/companies", all_pages=True)["data"]
@@ -462,11 +704,21 @@ def cmd_setup(args: argparse.Namespace) -> int:
 
 def cmd_doctor(_: argparse.Namespace) -> int:
     config = load_config()
-    token_source = "env" if "FIKEN_API_TOKEN" in __import__("os").environ else "config" if config.token else None
+    token_source = "env" if "FIKEN_API_TOKEN" in os.environ else "config" if config.token else None
     folio_token_source = (
-        "env" if "FOLIO_API_TOKEN" in __import__("os").environ else "config" if config.folio_token else None
+        "env" if "FOLIO_API_TOKEN" in os.environ else "config" if config.folio_token else None
     )
-    folio_base_source = "env" if "FOLIO_API_BASE_URL" in __import__("os").environ else "config" if config.folio_base_url else "default"
+    folio_base_source = "env" if "FOLIO_API_BASE_URL" in os.environ else "config" if config.folio_base_url else "default"
+    tripletex_token_source = (
+        "env"
+        if "TRIPLETEX_CONSUMER_TOKEN" in os.environ and "TRIPLETEX_EMPLOYEE_TOKEN" in os.environ
+        else "config"
+        if config.tripletex_consumer_token and config.tripletex_employee_token
+        else None
+    )
+    unimicro_token_source = (
+        "env" if "UNIMICRO_API_TOKEN" in os.environ else "config" if config.unimicro_api_token else None
+    )
     print_json(
         {
             "ok": True,
@@ -478,6 +730,21 @@ def cmd_doctor(_: argparse.Namespace) -> int:
                 "token_source": folio_token_source,
                 "has_base_url": True,
                 "base_url_source": folio_base_source,
+            },
+            "tripletex": {
+                "has_tokens": bool(tripletex_token_source),
+                "token_source": tripletex_token_source,
+                "company_id": resolve_tripletex_company_id(config),
+                "base_url": resolve_tripletex_base_url(config),
+                "session_cached": bool(config.tripletex_session_token),
+                "session_valid": session_is_valid(config.tripletex_session_expires),
+            },
+            "unimicro": {
+                "has_token": bool(unimicro_token_source),
+                "token_source": unimicro_token_source,
+                "has_company_key": bool(os.environ.get("UNIMICRO_COMPANY_KEY") or config.unimicro_company_key),
+                "api_base_url": resolve_unimicro_api_base_url(config),
+                "file_base_url": resolve_unimicro_file_base_url(config),
             },
         }
     )
@@ -500,21 +767,17 @@ def cmd_folio_setup(args: argparse.Namespace) -> int:
     if not base_url:
         raise ValueError("Mangler Folio base URL.")
 
-    config = Config(
-        token=existing.token,
-        default_company=existing.default_company,
-        folio_token=token,
-        folio_base_url=base_url,
-    )
-    path = save_config(config)
+    existing.folio_token = token
+    existing.folio_base_url = base_url
+    path = save_config(existing)
     print_json({"ok": True, "config": str(path), "folio_base_url": base_url})
     return 0
 
 
 def cmd_folio_doctor(_: argparse.Namespace) -> int:
     config = load_config()
-    token_source = "env" if "FOLIO_API_TOKEN" in __import__("os").environ else "config" if config.folio_token else None
-    base_url_source = "env" if "FOLIO_API_BASE_URL" in __import__("os").environ else "config" if config.folio_base_url else "default"
+    token_source = "env" if "FOLIO_API_TOKEN" in os.environ else "config" if config.folio_token else None
+    base_url_source = "env" if "FOLIO_API_BASE_URL" in os.environ else "config" if config.folio_base_url else "default"
     print_json(
         {
             "ok": True,
@@ -648,6 +911,333 @@ def cmd_folio_upload_attachment(args: argparse.Namespace) -> int:
 
 def cmd_folio_docs(_: argparse.Namespace) -> int:
     print_json({"ok": True, "docs_url": FOLIO_API_DOCS_URL, "openapi_url": FOLIO_OPENAPI_URL})
+    return 0
+
+
+def cmd_tripletex_setup(args: argparse.Namespace) -> int:
+    if args.consumer_token and args.consumer_token_stdin:
+        raise ValueError("Bruk enten --consumer-token eller --consumer-token-stdin.")
+    if args.employee_token and args.employee_token_stdin:
+        raise ValueError("Bruk enten --employee-token eller --employee-token-stdin.")
+    existing = load_config()
+    if args.consumer_token_stdin and args.employee_token_stdin:
+        lines = [line.strip() for line in sys.stdin.read().splitlines() if line.strip()]
+        if len(lines) < 2:
+            raise ValueError("Når begge Tripletex-token leses fra stdin, oppgi consumer token på linje 1 og employee token på linje 2.")
+        consumer_token, employee_token = lines[0], lines[1]
+    else:
+        consumer_token = read_optional_stdin_or_arg(
+            args.consumer_token,
+            args.consumer_token_stdin,
+            existing.tripletex_consumer_token,
+            "Tripletex consumer token: ",
+        )
+        employee_token = read_optional_stdin_or_arg(
+            args.employee_token,
+            args.employee_token_stdin,
+            existing.tripletex_employee_token,
+            "Tripletex employee token: ",
+        )
+    if not consumer_token or not employee_token:
+        raise ValueError("Mangler Tripletex consumer token eller employee token.")
+    existing.tripletex_consumer_token = consumer_token
+    existing.tripletex_employee_token = employee_token
+    existing.tripletex_company_id = args.company_id or existing.tripletex_company_id
+    existing.tripletex_base_url = args.base_url or existing.tripletex_base_url or DEFAULT_TRIPLETEX_BASE_URL
+    path = save_config(existing)
+    print_json(
+        {
+            "ok": True,
+            "config": str(path),
+            "tripletex_company_id": existing.tripletex_company_id or "0",
+            "tripletex_base_url": existing.tripletex_base_url,
+        }
+    )
+    return 0
+
+
+def cmd_tripletex_doctor(_: argparse.Namespace) -> int:
+    config = load_config()
+    token_source = (
+        "env"
+        if "TRIPLETEX_CONSUMER_TOKEN" in os.environ and "TRIPLETEX_EMPLOYEE_TOKEN" in os.environ
+        else "config"
+        if config.tripletex_consumer_token and config.tripletex_employee_token
+        else None
+    )
+    print_json(
+        {
+            "ok": True,
+            "has_tokens": bool(token_source),
+            "token_source": token_source,
+            "company_id": resolve_tripletex_company_id(config),
+            "base_url": resolve_tripletex_base_url(config),
+            "base_url_source": "env" if "TRIPLETEX_BASE_URL" in os.environ else "config" if config.tripletex_base_url else "default",
+            "session_cached": bool(config.tripletex_session_token),
+            "session_expires": config.tripletex_session_expires,
+            "session_valid": session_is_valid(config.tripletex_session_expires),
+        }
+    )
+    return 0
+
+
+def cmd_tripletex_capabilities(args: argparse.Namespace) -> int:
+    text = args.openapi_file.read_text(encoding="utf-8") if args.openapi_file else fetch_text_url(openapi_url_for_tripletex(args.base_url))
+    print_json(detect_tripletex_capabilities(text))
+    return 0
+
+
+def cmd_tripletex_whoami(args: argparse.Namespace) -> int:
+    client, config = tripletex_client_from_config(company_id=args.company_id)
+    print_response(client.get("/token/session/>whoAmI", config=config))
+    return 0
+
+
+def cmd_tripletex_list(args: argparse.Namespace) -> int:
+    client, config = tripletex_client_from_config()
+    print_response(client.get(TRIPLETEX_RESOURCE_ALIASES[args.resource], params=parse_filters(args.filter), config=config))
+    return 0
+
+
+def cmd_tripletex_get(args: argparse.Namespace) -> int:
+    client, config = tripletex_client_from_config()
+    print_response(client.get(args.path, params=parse_filters(args.filter), config=config))
+    return 0
+
+
+def cmd_tripletex_post(args: argparse.Namespace) -> int:
+    return tripletex_write_request(args, "POST", args.path, read_json_arg(args), params=parse_filters(args.filter))
+
+
+def cmd_tripletex_put(args: argparse.Namespace) -> int:
+    payload = read_optional_json_arg(args)
+    return tripletex_write_request(args, "PUT", args.path, payload, params=parse_filters(args.filter))
+
+
+def cmd_tripletex_delete(args: argparse.Namespace) -> int:
+    return tripletex_write_request(args, "DELETE", args.path, None, params=parse_filters(args.filter))
+
+
+def cmd_tripletex_pdf(args: argparse.Namespace) -> int:
+    paths = {
+        "supplier-invoice": f"/supplierInvoice/{args.id}/pdf",
+        "voucher": f"/ledger/voucher/{args.id}/pdf",
+        "payslip": f"/salary/payslip/{args.id}/pdf",
+    }
+    client, config = tripletex_client_from_config()
+    response = client.get_bytes(paths[args.kind], config=config)
+    output = args.output.expanduser().resolve()
+    output.parent.mkdir(parents=True, exist_ok=True)
+    output.write_bytes(response.data)
+    print_json({"ok": True, "status": response.status, "headers": response.headers, "output": str(output)})
+    return 0
+
+
+def cmd_tripletex_voucher(args: argparse.Namespace) -> int:
+    params: dict[str, Any] = {}
+    if args.send_to_ledger is not None:
+        params["sendToLedger"] = args.send_to_ledger
+    return tripletex_write_request(args, "POST", "/ledger/voucher", read_json_arg(args), params=params)
+
+
+def cmd_tripletex_attach_voucher(args: argparse.Namespace) -> int:
+    file_path = checked_file(args.file)
+    path = f"/ledger/voucher/{args.voucher_id}/attachment"
+    if not args.execute:
+        print_json({"ok": True, "dry_run": True, "method": "POST multipart", "path": path, "file": str(file_path)})
+        return 0
+    client, config = tripletex_client_from_config()
+    print_response(client.upload_file(path, file_path, config=config))
+    return 0
+
+
+def cmd_tripletex_supplier_invoice_action(args: argparse.Namespace) -> int:
+    params = parse_filters(args.filter)
+    if args.action == "add-payment":
+        if not args.invoice_id:
+            raise ValueError("--invoice-id kreves for add-payment.")
+        path = f"/supplierInvoice/{args.invoice_id}/:addPayment"
+        method = "POST"
+    elif args.invoice_id:
+        path = f"/supplierInvoice/{args.invoice_id}/:{args.action}"
+        method = "PUT"
+    else:
+        path = f"/supplierInvoice/:{args.action}"
+        method = "PUT"
+    return tripletex_write_request(args, method, path, None, params=params)
+
+
+def cmd_tripletex_invoice_payment(args: argparse.Namespace) -> int:
+    return tripletex_write_request(args, "PUT", f"/invoice/{args.invoice_id}/:payment", None, params=parse_filters(args.filter))
+
+
+def cmd_tripletex_prepare_salary_transaction(args: argparse.Namespace) -> int:
+    print_json(prepare_salary_transaction(read_json_arg(args)))
+    return 0
+
+
+def cmd_tripletex_salary_transaction(args: argparse.Namespace) -> int:
+    params: dict[str, Any] = {}
+    if args.generate_tax_deduction is not None:
+        params["generateTaxDeduction"] = args.generate_tax_deduction
+    return tripletex_write_request(args, "POST", "/salary/transaction", read_json_arg(args), params=params)
+
+
+def cmd_tripletex_attach_salary_transaction(args: argparse.Namespace) -> int:
+    file_path = checked_file(args.file)
+    path = f"/salary/transaction/{args.transaction_id}/attachment"
+    if not args.execute:
+        print_json({"ok": True, "dry_run": True, "method": "POST multipart", "path": path, "file": str(file_path)})
+        return 0
+    client, config = tripletex_client_from_config()
+    print_response(client.upload_file(path, file_path, config=config))
+    return 0
+
+
+def cmd_unimicro_setup(args: argparse.Namespace) -> int:
+    if args.token and args.token_stdin:
+        raise ValueError("Bruk enten --token eller --token-stdin.")
+    existing = load_config()
+    token = read_optional_stdin_or_arg(args.token, args.token_stdin, existing.unimicro_api_token, "UniMicro API-token: ")
+    if not token:
+        raise ValueError("Mangler UniMicro API-token.")
+    existing.unimicro_api_token = token
+    existing.unimicro_company_key = args.company_key or existing.unimicro_company_key
+    existing.unimicro_api_base_url = args.api_base_url or existing.unimicro_api_base_url or DEFAULT_UNIMICRO_API_BASE_URL
+    existing.unimicro_file_base_url = args.file_base_url or existing.unimicro_file_base_url or DEFAULT_UNIMICRO_FILE_BASE_URL
+    path = save_config(existing)
+    print_json(
+        {
+            "ok": True,
+            "config": str(path),
+            "unimicro_company_key": existing.unimicro_company_key,
+            "unimicro_api_base_url": existing.unimicro_api_base_url,
+            "unimicro_file_base_url": existing.unimicro_file_base_url,
+        }
+    )
+    return 0
+
+
+def cmd_unimicro_doctor(_: argparse.Namespace) -> int:
+    config = load_config()
+    token_source = "env" if "UNIMICRO_API_TOKEN" in os.environ else "config" if config.unimicro_api_token else None
+    print_json(
+        {
+            "ok": True,
+            "has_token": bool(token_source),
+            "token_source": token_source,
+            "has_company_key": bool(os.environ.get("UNIMICRO_COMPANY_KEY") or config.unimicro_company_key),
+            "api_base_url": resolve_unimicro_api_base_url(config),
+            "file_base_url": resolve_unimicro_file_base_url(config),
+        }
+    )
+    return 0
+
+
+def cmd_unimicro_capabilities(_: argparse.Namespace) -> int:
+    print_json(unimicro_capabilities())
+    return 0
+
+
+def cmd_unimicro_list(args: argparse.Namespace) -> int:
+    client = unimicro_client_from_config()
+    print_response(client.get(UNIMICRO_RESOURCE_ALIASES[args.resource], params=parse_filters(args.filter)))
+    return 0
+
+
+def cmd_unimicro_get(args: argparse.Namespace) -> int:
+    print_response(unimicro_client_from_config().get(args.path, params=parse_filters(args.filter)))
+    return 0
+
+
+def cmd_unimicro_post(args: argparse.Namespace) -> int:
+    return unimicro_write_request(args, "POST", args.path, read_json_arg(args), params=parse_filters(args.filter))
+
+
+def cmd_unimicro_put(args: argparse.Namespace) -> int:
+    return unimicro_write_request(args, "PUT", args.path, read_optional_json_arg(args), params=parse_filters(args.filter))
+
+
+def cmd_unimicro_delete(args: argparse.Namespace) -> int:
+    return unimicro_write_request(args, "DELETE", args.path, None, params=parse_filters(args.filter))
+
+
+def cmd_unimicro_prepare_supplier_invoice(args: argparse.Namespace) -> int:
+    print_json(prepare_unimicro_supplier_invoice(read_json_arg(args)))
+    return 0
+
+
+def cmd_unimicro_supplier_invoice(args: argparse.Namespace) -> int:
+    return unimicro_write_request(args, "POST", "/api/biz/supplierinvoices", read_json_arg(args))
+
+
+def cmd_unimicro_assign_supplier_invoice(args: argparse.Namespace) -> int:
+    return unimicro_write_request(
+        args,
+        "POST",
+        f"/api/biz/supplierinvoices/{args.invoice_id}",
+        read_json_arg(args),
+        params={"action": "assign-to"},
+    )
+
+
+def cmd_unimicro_prepare_journal_entry(args: argparse.Namespace) -> int:
+    candidate = read_json_arg(args)
+    accounts = read_json_file_or_empty(args.accounts_json_file)
+    vat_types = read_json_file_or_empty(args.vattypes_json_file)
+    print_json(prepare_unimicro_journal_entry(candidate, accounts=accounts, vat_types=vat_types))
+    return 0
+
+
+def cmd_unimicro_journal_entry(args: argparse.Namespace) -> int:
+    return unimicro_write_request(
+        args,
+        "POST",
+        "/api/biz/journalentries",
+        read_json_arg(args),
+        params={"action": "book-journal-entries"},
+    )
+
+
+def cmd_unimicro_upload_file(args: argparse.Namespace) -> int:
+    file_path = checked_file(args.file)
+    fields: dict[str, str | int | bool] = {"FileName": file_path.name}
+    if args.caption:
+        fields["Caption"] = args.caption
+    if args.entity_id:
+        fields["EntityID"] = args.entity_id
+    if args.entity_type:
+        fields["EntityType"] = args.entity_type
+    if not args.execute:
+        print_json({"ok": True, "dry_run": True, "method": "POST multipart", "path": "/api/file", "file": str(file_path), "fields": fields})
+        return 0
+    print_response(unimicro_client_from_config().upload_file(file_path, fields=fields))
+    return 0
+
+
+def cmd_unimicro_link_file(args: argparse.Namespace) -> int:
+    path = f"/api/biz/files/{args.file_id}"
+    params = {"action": "link", "entitytype": args.entity_type, "entityid": args.entity_id}
+    return unimicro_write_request(args, "POST", path, None, params=params)
+
+
+def cmd_unimicro_ocr_file(args: argparse.Namespace) -> int:
+    print_response(unimicro_client_from_config().get(f"/api/biz/files/{args.file_id}", params={"action": "ocranalyse"}))
+    return 0
+
+
+def cmd_providers_capabilities(args: argparse.Namespace) -> int:
+    result: dict[str, Any] = {"ok": True, "providers": {}}
+    if args.provider in (None, "tripletex"):
+        text = (
+            args.tripletex_openapi_file.read_text(encoding="utf-8")
+            if args.tripletex_openapi_file
+            else fetch_text_url(TRIPLETEX_OPENAPI_URL)
+        )
+        result["providers"]["tripletex"] = detect_tripletex_capabilities(text)
+    if args.provider in (None, "unimicro"):
+        result["providers"]["unimicro"] = unimicro_capabilities()
+    print_json(result)
     return 0
 
 
@@ -980,6 +1570,74 @@ def write_json_request(
     return 0
 
 
+def tripletex_write_request(
+    args: argparse.Namespace,
+    method: str,
+    path: str,
+    payload: Any | None,
+    *,
+    params: dict[str, Any] | None = None,
+) -> int:
+    if not getattr(args, "execute", False):
+        print_json(
+            {
+                "ok": True,
+                "dry_run": True,
+                "provider": "tripletex",
+                "method": method,
+                "path": path,
+                "params": params or {},
+                "json": payload,
+                "warning": "Tripletex-write krever eksplisitt bruker-godkjenning før --execute.",
+            }
+        )
+        return 0
+    client, config = tripletex_client_from_config()
+    if method == "POST":
+        print_response(client.post(path, body=payload, params=params, config=config))
+    elif method == "PUT":
+        print_response(client.put(path, body=payload, params=params, config=config))
+    elif method == "DELETE":
+        print_response(client.delete(path, params=params, config=config))
+    else:
+        raise ValueError(f"Ikke støttet Tripletex-write: {method}")
+    return 0
+
+
+def unimicro_write_request(
+    args: argparse.Namespace,
+    method: str,
+    path: str,
+    payload: Any | None,
+    *,
+    params: dict[str, Any] | None = None,
+) -> int:
+    if not getattr(args, "execute", False):
+        print_json(
+            {
+                "ok": True,
+                "dry_run": True,
+                "provider": "unimicro",
+                "method": method,
+                "path": path,
+                "params": params or {},
+                "json": payload,
+                "warning": "UniMicro-write krever eksplisitt bruker-godkjenning før --execute.",
+            }
+        )
+        return 0
+    client = unimicro_client_from_config()
+    if method == "POST":
+        print_response(client.post(path, body=payload, params=params))
+    elif method == "PUT":
+        print_response(client.put(path, body=payload, params=params))
+    elif method == "DELETE":
+        print_response(client.delete(path, params=params))
+    else:
+        raise ValueError(f"Ikke støttet UniMicro-write: {method}")
+    return 0
+
+
 def client_from_config(config: Config | None = None) -> FikenClient:
     config = config or load_config()
     return FikenClient(resolve_token(config))
@@ -993,10 +1651,86 @@ def folio_client_from_config(config: Config | None = None, *, base_url: str | No
     )
 
 
+def tripletex_client_from_config(
+    config: Config | None = None,
+    *,
+    company_id: str | None = None,
+    base_url: str | None = None,
+) -> tuple[TripletexClient, Config]:
+    config = config or load_config()
+    session_token = config.tripletex_session_token if session_is_valid(config.tripletex_session_expires) else None
+    client = TripletexClient(
+        consumer_token=resolve_tripletex_consumer_token(config),
+        employee_token=resolve_tripletex_employee_token(config),
+        company_id=resolve_tripletex_company_id(config, company_id),
+        base_url=resolve_tripletex_base_url(config, base_url),
+        session_token=session_token,
+    )
+    return client, config
+
+
+def unimicro_client_from_config(
+    config: Config | None = None,
+    *,
+    company_key: str | None = None,
+    api_base_url: str | None = None,
+    file_base_url: str | None = None,
+) -> UniMicroClient:
+    config = config or load_config()
+    return UniMicroClient(
+        token=resolve_unimicro_api_token(config),
+        company_key=resolve_unimicro_company_key(config, company_key),
+        api_base_url=resolve_unimicro_api_base_url(config, api_base_url),
+        file_base_url=resolve_unimicro_file_base_url(config, file_base_url),
+    )
+
+
 def read_json_arg(args: argparse.Namespace) -> Any:
     if args.json_file:
         return json.loads(args.json_file.read_text(encoding="utf-8"))
     return json.loads(args.json)
+
+
+def read_optional_json_arg(args: argparse.Namespace) -> Any | None:
+    if getattr(args, "json_file", None):
+        return json.loads(args.json_file.read_text(encoding="utf-8"))
+    if getattr(args, "json", None):
+        return json.loads(args.json)
+    return None
+
+
+def read_optional_stdin_or_arg(
+    value: str | None,
+    stdin_flag: bool,
+    fallback: str | None,
+    prompt: str,
+) -> str | None:
+    if stdin_flag:
+        return sys.stdin.read().strip()
+    if value:
+        return value
+    if fallback:
+        return fallback
+    if sys.stdin.isatty():
+        return getpass.getpass(prompt)
+    return None
+
+
+def read_json_file_or_empty(path: Path | None) -> list[dict[str, Any]]:
+    if not path:
+        return []
+    value = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(value, dict):
+        value = value.get("data") or value.get("values") or []
+    if not isinstance(value, list):
+        raise ValueError(f"Forventet JSON-liste i {path}")
+    return [item for item in value if isinstance(item, dict)]
+
+
+def openapi_url_for_tripletex(base_url: str | None = None) -> str:
+    if not base_url:
+        return TRIPLETEX_OPENAPI_URL
+    return base_url.rstrip("/") + "/openapi.json"
 
 
 def folio_date_params(args: argparse.Namespace) -> dict[str, Any]:
